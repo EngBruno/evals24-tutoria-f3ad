@@ -1,0 +1,32 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">
+    <title>Red Hat Fuse Aggregation</title>
+    <link rel="stylesheet"
+          href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css"
+          integrity="sha384-BVYiiSIFeK1dGmJRAkycuHAHRg32OmUcww7on3RYdg4Va+PmSTsz/K68vbdEjh4u"
+          crossorigin="anonymous">
+</head>
+<body>
+<div class="container">
+    <div>
+        <h1>Red Hat Fuse Aggregation</h1>
+        <p class="lead">
+            The booster demonstrates how to aggregate JSON data from 2 services using Camel. 
+        </p>
+        <p class="lead">
+            To demonstrate the behavior of this booster:  
+          
+            <ul class="lead">
+              <li>Click <a class="btn btn-info" href="/camel/flights" target="_blank">camel/flights</a> to retrieve a list of flights (arrivals and departures).
+                <p>A new browser window opens and shows a response in JSON format with a payload of flights.</code></li>
+                <li>Arrivals and Departures are aggregated from 2 separate services. See `CamelRouter.java` for how these 2 services are aggregated</li>
+                <li>These services are configured to be local service beans by default. However, you can change the camel routing to fetch data from 2 mock servers (included in this booster).</li>
+        </ul>
+        </p>
+          <p class="lead">Click <a class="btn btn-info" href="/webjars/swagger-ui/index.html?url=/camel/api-doc&validatorUrl=" target="_blank">API Swagger page</a> to open the REST API's Swagger page.</p>
+    </div>
+</div>
+</body>
+</html>

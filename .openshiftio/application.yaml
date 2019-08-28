@@ -1,0 +1,483 @@
+apiVersion: v1
+kind: Template
+metadata:
+  name: launchpad-builder-fuse-flights-aggregator
+  annotations:
+    description: This template creates a Build Configuration using an S2I builder.
+    tags: instant-app
+parameters:
+- name: SOURCE_REPOSITORY_URL
+  description: The source URL for the application
+  displayName: Source URL
+  required: true
+- name: SOURCE_REPOSITORY_REF
+  description: The branch name for the application
+  displayName: Source Branch
+  value: master
+  required: true
+- name: SOURCE_REPOSITORY_DIR
+  description: The location within the source repo of the application
+  displayName: Source Directory
+  value: .
+  required: true
+- name: ARTIFACT_COPY_ARGS
+  description: Syntax to be used to copy uberjar files to the target directory
+  displayName: Copy Args
+  value: '*-exec.jar'
+  required: true
+- name: GITHUB_WEBHOOK_SECRET
+  description: A secret string used to configure the GitHub webhook.
+  displayName: GitHub Webhook Secret
+  required: true
+  from: '[a-zA-Z0-9]{40}'
+  generate: expression
+- name: MAVEN_MIRROR_URL
+  description: Maven Nexus Repository to be used during build phase
+  displayName:
+  value: ''
+  required: false
+- name: BUILDER_IMAGE_NAME
+  description: Name of the image to use as a builder image
+  displayName: Builder Image Name
+  value: 'fabric8/s2i-java:latest'
+  required: true
+objects:
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    name: fuse-java-openshift
+  spec:
+    tags:
+    - name: "latest"
+      annotations:
+        description: Fabric8 Java S2I images.
+        iconClass: icon-jboss
+        tags: 'builder,jboss-fuse,java,xpaas,hidden'
+        version: '1.0'
+      from:
+        kind: DockerImage
+        name: ${BUILDER_IMAGE_NAME}
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    name: fuse-flights-aggregator
+  spec: {}
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    name: fuse-flights-aggregator
+    labels:
+      app: fuse-flights-aggregator
+      group: com.redhat.fuse.boosters
+      provider: fabric8
+  spec:
+    output:
+      to:
+        kind: ImageStreamTag
+        name: fuse-flights-aggregator:latest
+    postCommit: {}
+    resources: {}
+    runPolicy: Serial
+    source:
+      git:
+        uri: ${SOURCE_REPOSITORY_URL}
+        ref: ${SOURCE_REPOSITORY_REF}
+        #contextDir: ${SOURCE_REPOSITORY_DIR}
+      type: Git
+    strategy:
+      sourceStrategy:
+        env:
+          - name: BUILD_LOGLEVEL
+            value: '5'
+          - name: MAVEN_ARGS_APPEND
+            value: "-pl ${SOURCE_REPOSITORY_DIR}"
+          - name: ARTIFACT_DIR
+            value: "${SOURCE_REPOSITORY_DIR}/target"
+          - name: MAVEN_MIRROR_URL
+            value: "${MAVEN_MIRROR_URL}"
+          - name: ARTIFACT_COPY_ARGS
+            value: "${ARTIFACT_COPY_ARGS}"
+        forcePull: true
+        from:
+          kind: ImageStreamTag
+          name: fuse-java-openshift:latest
+        incremental: true
+      type: Source
+    triggers:
+    - github:
+        secret: ${GITHUB_WEBHOOK_SECRET}
+      type: GitHub
+    - type: ConfigChange
+    - imageChange: {}
+      type: ImageChange
+  status:
+    lastVersion: 0
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      prometheus.io/port: "9779"
+      prometheus.io/scrape: "true"
+    labels:
+      expose: "true"
+      app: fuse-flights-aggregator
+      provider: fabric8
+      group: com.redhat.fuse.boosters
+    name: fuse-flights-aggregator
+  spec:
+    ports:
+    - name: http
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    selector:
+      app: fuse-flights-aggregator
+      provider: fabric8
+      group: com.redhat.fuse.boosters
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      app: fuse-flights-aggregator
+      group: com.redhat.fuse.boosters
+    name: arrivals
+  spec:
+    ports:
+    - name: http
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    selector:
+      app: fuse-flights-aggregator
+      group: com.redhat.fuse.boosters
+      service: arrivals
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      app: fuse-flights-aggregator
+      group: com.redhat.fuse.boosters
+    name: departures
+  spec:
+    ports:
+    - name: http
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    selector:
+      app: fuse-flights-aggregator
+      group: com.redhat.fuse.boosters
+      service: departures
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    labels:
+      app: fuse-flights-aggregator
+      provider: fabric8
+      group: com.redhat.fuse.boosters
+    name: fuse-flights-aggregator
+  spec:
+    replicas: 1
+    revisionHistoryLimit: 2
+    selector:
+      app: fuse-flights-aggregator
+      provider: fabric8
+      group: com.redhat.fuse.boosters
+    strategy:
+      rollingParams:
+        timeoutSeconds: 3600
+      type: Rolling
+    template:
+      metadata:
+        labels:
+          app: fuse-flights-aggregator
+          provider: fabric8
+          group: com.redhat.fuse.boosters
+      spec:
+        containers:
+        - env:
+          - name: KUBERNETES_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: ARRIVALS_HOST
+            value: arrivals:8080
+          - name: DEPARTURES_HOST
+            value: departures:8080
+          image: fuse-flights-aggregator:latest
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 180
+          name: fuse-flights-aggregator
+          ports:
+          - containerPort: 8080
+            name: http
+            protocol: TCP
+          - containerPort: 9779
+            name: prometheus
+            protocol: TCP
+          - containerPort: 8778
+            name: jolokia
+            protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 10
+          resources:
+            limits:
+              cpu: 500m
+              memory: 350Mi
+            requests:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            privileged: false
+    triggers:
+    - type: ConfigChange
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - fuse-flights-aggregator
+        from:
+          kind: ImageStreamTag
+          name: fuse-flights-aggregator:latest
+      type: ImageChange
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    labels:
+      app: fuse-flights-aggregator
+      group: com.redhat.fuse.boosters
+      service: arrivals
+    name: arrivals
+  spec:
+    replicas: 1
+    revisionHistoryLimit: 2
+    selector:
+      app: fuse-flights-aggregator
+      service: arrivals
+      group: com.redhat.fuse.boosters
+    strategy:
+      rollingParams:
+        timeoutSeconds: 3600
+      type: Rolling
+    template:
+      metadata:
+        labels:
+          app: fuse-flights-aggregator
+          service: arrivals
+          group: com.redhat.fuse.boosters
+      spec:
+        containers:
+        - image: quay.io/dmartin/mockserver:latest
+          imagePullPolicy: IfNotPresent
+          name: arrivals
+          ports:
+          - containerPort: 8080
+            name: http
+            protocol: TCP
+          resources: {}
+          securityContext:
+            privileged: false
+          volumeMounts:
+          - mountPath: /tmp/mocks/arrivals
+            name: arrivals
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: arrivals
+          name: arrivals
+    triggers:
+    - type: ConfigChange
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    labels:
+      app: fuse-flights-aggregator
+      group: com.redhat.fuse.boosters
+      service: departures
+    name: departures
+  spec:
+    replicas: 1
+    revisionHistoryLimit: 2
+    selector:
+      app: fuse-flights-aggregator
+      service: departures
+      group: com.redhat.fuse.boosters
+    strategy:
+      rollingParams:
+        timeoutSeconds: 3600
+      type: Rolling
+    template:
+      metadata:
+        labels:
+          app: fuse-flights-aggregator
+          service: departures
+          group: com.redhat.fuse.boosters
+      spec:
+        containers:
+        - image: quay.io/dmartin/mockserver:latest
+          imagePullPolicy: IfNotPresent
+          name: departures
+          ports:
+          - containerPort: 8080
+            name: http
+            protocol: TCP
+          resources: {}
+          securityContext:
+            privileged: false
+          volumeMounts:
+          - mountPath: /tmp/mocks/departures
+            name: departures
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: departures
+          name: departures
+    triggers:
+    - type: ConfigChange
+- apiVersion: v1
+  kind: ConfigMap
+  data:
+    GET.mock: |-
+      HTTP/1.1 200 OK
+      Content-Type: application/json; charset=utf-8
+
+      [{
+        "code": "LAX",
+        "time": 1538050030000
+      }, {
+        "code": "ORD",
+        "time": 1538051000000
+      }, {
+        "code": "DFW",
+        "time": 1538052030000
+      }, {
+        "code": "DEN",
+        "time": 1538053030000
+      }, {
+        "code": "SFO",
+        "time": 1538050030000
+      }, {
+        "code": "LAS",
+        "time": 1538051000000
+      }, {
+        "code": "SEA",
+        "time": 1538052030000
+      }, {
+        "code": "CLT",
+        "time": 1538053030000
+      }, {
+        "code": "DUB",
+        "time": 1538050030000
+      }, {
+        "code": "JFK",
+        "time": 1538051000000
+      }, {
+        "code": "RDU",
+        "time": 1538052030000
+      }, {
+        "code": "ATL",
+        "time": 1538053030000
+      }, {
+        "code": "MCO",
+        "time": 1538052030000
+      }, {
+        "code": "PHX",
+        "time": 1538053030000
+      }]
+  metadata:
+    labels:
+      app: fuse-flights-aggregator
+      group: com.redhat.fuse.boosters
+    name: arrivals
+- apiVersion: v1
+  kind: ConfigMap
+  data:
+    GET.mock: |-
+      HTTP/1.1 200 OK
+      Content-Type: application/json; charset=utf-8
+
+      [{
+        "code": "CDG",
+        "time": 1538054430000
+      }, {
+        "code": "JFK",
+        "time": 1538055500000
+      }, {
+        "code": "EWR",
+        "time": 1538056630000
+      }, {
+        "code": "MIA",
+        "time": 1538057730000
+      }, {
+        "code": "LAX",
+        "time": 1538060030000
+      }, {
+        "code": "ORD",
+        "time": 1538052000000
+      }, {
+        "code": "DFW",
+        "time": 1538051030000
+      }, {
+        "code": "DEN",
+        "time": 1538053230000
+      }, {
+        "code": "SFO",
+        "time": 1538060030000
+      }, {
+        "code": "LAS",
+        "time": 1538052000000
+      }, {
+        "code": "SEA",
+        "time": 1538051030000
+      }, {
+        "code": "CLT",
+        "time": 1538053230000
+      }, {
+        "code": "DUB",
+        "time": 1538060030000
+      }, {
+        "code": "JFK",
+        "time": 1538052000000
+      }, {
+        "code": "RDU",
+        "time": 1538051030000
+      }, {
+        "code": "ATL",
+        "time": 1538053230000
+      }, {
+        "code": "MCO",
+        "time": 1538051030000
+      }, {
+        "code": "PHX",
+        "time": 1538053230000
+      }]
+  metadata:
+    labels:
+      app: fuse-flights-aggregator
+      group: com.redhat.fuse.boosters
+    name: departures
+- apiVersion: v1
+  kind: Route
+  metadata:
+    labels:
+      app: fuse-flights-aggregator
+      provider: fabric8
+      group: com.redhat.fuse.boosters
+    name: fuse-flights-aggregator
+  spec:
+    tls:
+      insecureEdgeTerminationPolicy: Allow
+      termination: edge
+    port:
+      targetPort: 8080
+    to:
+      kind: Service
+      name: fuse-flights-aggregator
